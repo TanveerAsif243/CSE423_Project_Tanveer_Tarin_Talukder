@@ -78,3 +78,351 @@ combo_count = 0
 combo_timer = 0.0
 score_multiplier = 1.0
 best_combo = 0
+# Game state
+_quad = None
+_last_time_ms = None
+enemies = []
+obstacles = []
+collectibles = []
+game_state = 'menu'
+selected_player = 0
+scoreboard = []
+
+# Player abilities cooldowns
+ability_cooldowns = {
+    'high_jump': 0,
+    'speed_burst': 0,
+    'invincibility': 0,
+    'freeze': 0,
+    'movement': 0
+}
+ability_uses = {key: 0 for key in ability_cooldowns}
+
+# Power-up effects
+power_effects = {
+    'immune_time': 0,
+    'double_score_time': 0,
+    'freeze_time': 0,
+    'speed_time': 0,
+    'invincible_time': 0
+}
+
+# Player types
+PLAYER_TYPES = [
+    {'name': 'JUMPER',     'color': (0.0, 0.8, 0.0), 'jump_power': 600, 'special': 'high_jump'},
+    {'name': 'SPEEDSTER',  'color': (0.0, 0.0, 1.0), 'jump_power': 450, 'special': 'speed_burst'},
+    {'name': 'TANK',       'color': (1.0, 0.5, 0.0), 'jump_power': 400, 'special': 'invincibility'},
+    {'name': 'CONTROLLER', 'color': (0.8, 0.0, 0.8), 'jump_power': 450, 'special': 'freeze'}
+]
+
+# Player class
+class Player:
+    def __init__(self):
+        self.x = 0.0
+        self.y = -GRID_LENGTH + 120.0
+        self.z = 0.0
+        self.vz = 0.0
+        self.speed_forward = 200.0
+        self.speed_side = 300.0
+        self.speed_manual = 200.0
+        self.gravity = -1200.0
+        self.scale = PLAYER_SCALE
+        self.radius = 25.0 * self.scale
+        self.height = 50.0 * self.scale
+
+        # Game stats
+        self.lives = 3
+        self.health = 100
+        self.score = 0
+        self.level = 1
+        self.distance = 0
+        self.consecutive_collect = {'type': None, 'count': 0}
+
+        # Movement flags - REMOVED for template compatibility
+        self.on_ground = True
+
+    def get_type(self):
+        return PLAYER_TYPES[selected_player]
+
+    def use_ability(self):
+        ptype = self.get_type()
+        ability = ptype['special']
+
+        if ability_uses[ability] >= 2:
+            return False
+
+        if ability_cooldowns[ability] > 0:
+            return False
+
+        ability_uses[ability] += 1
+        ability_cooldowns[ability] = 5.0
+
+        for key in ability_uses:
+            if key != ability:
+                ability_uses[key] = 0
+
+        if ability == 'high_jump':
+            self.vz = 800
+            self.on_ground = False
+        elif ability == 'speed_burst':
+            power_effects['speed_time'] = 3.0
+        elif ability == 'invincibility':
+            power_effects['invincible_time'] = 4.0
+        elif ability == 'freeze':
+            power_effects['freeze_time'] = 3.0
+
+        return True
+
+player = Player()
+
+# Smooth movement function
+def update_smooth_movement_simple(dt):
+    """Simple smooth movement with auto-decay"""
+    global current_movement
+    
+    # Decay movement counters
+    for direction in current_movement:
+        if current_movement[direction] > 0:
+            current_movement[direction] -= 1
+    
+    # Apply smooth movement based on active directions
+    move_speed = 200.0 * dt
+    
+    if current_movement['left'] > 0:
+        player.x -= move_speed
+    if current_movement['right'] > 0:
+        player.x += move_speed
+    if current_movement['forward'] > 0:
+        player.y += move_speed
+    if current_movement['backward'] > 0:
+        player.y -= move_speed
+
+# Helpers
+def ensure_quad():
+    global _quad
+    if _quad is None:
+        _quad = gluNewQuadric()
+
+def clamp(v, lo, hi): 
+    return max(lo, min(hi, v))
+
+def distance_2d(x1, y1, x2, y2):
+    return math.sqrt((x1-x2)**2 + (y1-y2)**2)
+
+# Scoreboard management
+def load_scoreboard():
+    global scoreboard
+    try:
+        if os.path.exists('scoreboard.json'):
+            with open('scoreboard.json', 'r') as f:
+                scoreboard = json.load(f)
+        else:
+            scoreboard = []
+    except:
+        scoreboard = []
+
+def save_scoreboard():
+    try:
+        with open('scoreboard.json', 'w') as f:
+            json.dump(scoreboard, f)
+    except:
+        pass
+
+def add_score_to_board(score):
+    global scoreboard
+    scoreboard.append(score)
+    scoreboard.sort(reverse=True)
+    scoreboard = scoreboard[:10]
+    save_scoreboard()
+
+def get_player_rank(score):
+    for i, s in enumerate(scoreboard):
+        if score >= s:
+            return i + 1
+    return len(scoreboard) + 1
+
+# Infinite checkerboard with day/night tint
+def draw_tiles_infinite():
+    back_len, front_len = 1200.0, 4000.0
+    y0 = player.y - back_len
+    y1 = player.y + front_len
+    j0 = int(math.floor(y0 / TILE_SIZE))
+    j1 = int(math.floor(y1 / TILE_SIZE) + 1)
+    i0 = int(math.floor(-GRID_LENGTH / TILE_SIZE))
+    i1 = int(math.floor( GRID_LENGTH / TILE_SIZE) + 1)
+
+    brightness = get_day_brightness()
+    c1 = (0.92 * brightness, 0.92 * brightness, 0.96 * brightness)
+    c2 = (0.72 * brightness, 0.62 * brightness, 0.92 * brightness)
+
+    for j in range(j0, j1):
+        ty0, ty1 = j * TILE_SIZE, j * TILE_SIZE + TILE_SIZE
+        for i in range(i0, i1):
+            tx0, tx1 = i * TILE_SIZE, i * TILE_SIZE + TILE_SIZE
+            glColor3f(*(c1 if ((i + j) & 1) == 0 else c2))
+            glBegin(GL_QUADS)
+            glVertex3f(tx0, ty0, 0)
+            glVertex3f(tx1, ty0, 0)
+            glVertex3f(tx1, ty1, 0)
+            glVertex3f(tx0, ty1, 0)
+            glEnd()
+
+# Side walls (tinted by day/night)
+def draw_side_walls_infinite():
+    left_x  = -GRID_LENGTH + WALL_INSET
+    right_x =  GRID_LENGTH - WALL_INSET
+    back_len, front_len = 1200.0, 4000.0
+    y0 = math.floor((player.y - back_len) / TILE_SIZE) * TILE_SIZE
+    y1 = math.floor((player.y + front_len) / TILE_SIZE + 1) * TILE_SIZE
+
+    b = 0.6 + 0.4 * get_day_brightness()
+    wall_color = (WALL_COLOR_BASE[0]*b, WALL_COLOR_BASE[1]*b, WALL_COLOR_BASE[2]*b)
+    glColor3f(*wall_color)
+
+    # Left wall
+    glBegin(GL_QUADS)
+    glVertex3f(left_x, y0, 0)
+    glVertex3f(left_x, y1, 0)
+    glVertex3f(left_x, y1, WALL_HEIGHT)
+    glVertex3f(left_x, y0, WALL_HEIGHT)
+    glEnd()
+
+    # Right wall
+    glBegin(GL_QUADS)
+    glVertex3f(right_x, y0, 0)
+    glVertex3f(right_x, y1, 0)
+    glVertex3f(right_x, y1, WALL_HEIGHT)
+    glVertex3f(right_x, y0, WALL_HEIGHT)
+    glEnd()
+
+def clamp_to_walls():
+    left_x = -GRID_LENGTH + WALL_INSET
+    right_x = GRID_LENGTH - WALL_INSET
+    margin = 100.0
+    player.x = clamp(player.x, left_x + margin, right_x - margin)
+
+# Global camera state
+camera_pos = [0.0, -500.0, 400.0]
+camera_look = [0.0, 0.0, 80.0]
+
+def lerp(a, b, t):
+    return a + (b - a) * t
+
+def setupCamera():
+    global camera_pos, camera_look
+
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    gluPerspective(FOVY, ASPECT, 0.1, 6000.0)
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+
+    s = player.scale
+
+    target_x = player.x
+    target_y = player.y - 300 * s
+    target_z = player.z + 250 * s
+
+    look_x = player.x
+    look_y = player.y + 200 * s
+    look_z = max(30.0 * s, player.z + 50.0 * s)
+
+    smooth = 0.1
+    camera_pos[0] = lerp(camera_pos[0], target_x, smooth)
+    camera_pos[1] = lerp(camera_pos[1], target_y, smooth)
+    camera_pos[2] = lerp(camera_pos[2], target_z, smooth)
+
+    camera_look[0] = lerp(camera_look[0], look_x, smooth)
+    camera_look[1] = lerp(camera_look[1], look_y, smooth)
+    camera_look[2] = lerp(camera_look[2], look_z, smooth)
+
+    sway = (player.x - camera_pos[0]) * 0.05
+    camera_pos[0] += sway
+    camera_look[0] += sway * 0.5
+
+    gluLookAt(camera_pos[0], camera_pos[1], camera_pos[2],
+              camera_look[0], camera_look[1], camera_look[2],
+              0, 0, 1)
+
+# Player drawing
+def draw_player():
+    ensure_quad()
+    ptype = player.get_type()
+
+    # Removed transparency effect - use only glColor3f
+    if power_effects['invincible_time'] > 0:
+        # Simple blinking effect without alpha
+        if (animation_counter // 10) % 2 == 0:
+            glColor3f(ptype['color'][0], ptype['color'][1], ptype['color'][2])
+        else:
+            glColor3f(1.0, 1.0, 1.0)  # White blink
+    else:
+        glColor3f(*ptype['color'])
+
+    glPushMatrix()
+    glTranslatef(player.x, player.y, player.z + 15)
+    glScalef(player.scale, player.scale, player.scale)
+
+    glPushMatrix()
+    glRotatef(-90, 1, 0, 0)
+    gluCylinder(_quad, 20, 20, 40, 16, 16)
+    glPopMatrix()
+
+    glPushMatrix()
+    glTranslatef(0, 0, 25)
+    glColor3f(0.0, 0.0, 0.0)
+    gluSphere(_quad, 15, 16, 16)
+    glPopMatrix()
+
+    glPopMatrix()
+
+# 2D overlay helpers (HUD) - simplified
+def begin_2d():
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, WINDOW_W, 0, WINDOW_H)
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+def end_2d():
+    glMatrixMode(GL_MODELVIEW)
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+
+def draw_text(x, y, text, font=GLUT_BITMAP_HELVETICA_18):
+    glRasterPos2f(x, y)
+    for ch in text:
+        glutBitmapCharacter(font, ord(ch))
+
+def draw_rect(x0, y0, x1, y1):
+    glBegin(GL_QUADS)
+    glVertex2f(x0, y0)
+    glVertex2f(x1, y0)
+    glVertex2f(x1, y1)
+    glVertex2f(x0, y1)
+    glEnd()
+
+# Simplified circle using quads
+def draw_circle(cx, cy, r, segments=8):
+    glBegin(GL_QUADS)
+    for i in range(segments):
+        a1 = 2.0 * math.pi * i / segments
+        a2 = 2.0 * math.pi * (i + 1) / segments
+        glVertex2f(cx + math.cos(a1) * r, cy + math.sin(a1) * r)
+        glVertex2f(cx + math.cos(a2) * r, cy + math.sin(a2) * r)
+        glVertex2f(cx + math.cos(a2) * r * 0.8, cy + math.sin(a2) * r * 0.8)
+        glVertex2f(cx + math.cos(a1) * r * 0.8, cy + math.sin(a1) * r * 0.8)
+    glEnd()
+
+def draw_lives(x, y, count):
+    spacing = 28
+    r = 10
+    for i in range(count):
+        glColor3f(0.9, 0.1, 0.1)
+        draw_circle(x + i * spacing, y, r, segments=8)
+        glColor3f(1.0, 1.0, 1.0)
+        draw_circle(x + i * spacing - 3, y + 4, 3, segments=6)
