@@ -644,3 +644,55 @@ def manage_collectibles(dt):
     if random.random() < COLLECTIBLE_SPAWN_RATE * dt:
         collectibles.append(spawn_collectible())
 
+
+# Combo helpers
+def add_combo():
+    global combo_count, combo_timer, score_multiplier, best_combo
+    combo_count += 1
+    best_combo = max(best_combo, combo_count)
+    combo_timer = COMBO_WINDOW
+    steps = combo_count // COMBO_STEP
+    score_multiplier = min(1.0 + 0.5 * steps, MAX_MULTIPLIER)
+
+def decay_combo(dt):
+    global combo_timer, combo_count, score_multiplier
+    if combo_timer > 0:
+        combo_timer -= dt
+        if combo_timer <= 0:
+            combo_count = 0
+            score_multiplier = 1.0
+
+def combo_reset_on_damage():
+    global combo_count, combo_timer, score_multiplier
+    combo_count = 0
+    combo_timer = 0.0
+    score_multiplier = 1.0
+
+def collect_item(col):
+    base_score = 1
+    if power_effects['double_score_time'] > 0:
+        base_score *= 2
+
+    if player.consecutive_collect['type'] == col['type']:
+        player.consecutive_collect['count'] += 1
+        if player.consecutive_collect['count'] >= 2:
+            base_score = max(base_score, 2)
+    else:
+        player.consecutive_collect['type'] = col['type']
+        player.consecutive_collect['count'] = 1
+
+    add_combo()
+    total_score = int(base_score * score_multiplier)
+
+    if col['type'] in ['cube', 'sphere', 'cylinder']:
+        player.score += total_score
+    elif col['type'] == 'golden_cube':
+        player.health = min(100, player.health + 25)
+        player.score += total_score
+    elif col['type'] == 'golden_sphere':
+        power_effects['double_score_time'] = 8.0
+        player.score += total_score
+    elif col['type'] == 'golden_cylinder':
+        power_effects['immune_time'] = 6.0
+        player.score += total_score
+
