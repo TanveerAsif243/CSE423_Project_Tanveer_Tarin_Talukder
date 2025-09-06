@@ -595,4 +595,52 @@ def manage_obstacles(dt):
     obstacles = [o for o in obstacles if o['y'] > player.y - 300]
     if random.random() < OBSTACLE_SPAWN_RATE * (1 + player.level * 0.1) * dt:
         obstacles.append(spawn_obstacle())
+# Collectibles
+def spawn_collectible():
+    types = ['cube', 'sphere', 'cylinder', 'golden_cube', 'golden_sphere', 'golden_cylinder']
+    weights = [30, 30, 30, 3, 3, 4]
+    ctype = random.choices(types, weights=weights)[0]
+    return {
+        'type': ctype,
+        'x': random.uniform(-GRID_LENGTH + WALL_INSET + 50, GRID_LENGTH - WALL_INSET - 50),
+        'y': player.y + random.uniform(200, 1200),
+        'z': random.uniform(25, 120),
+        'rotation': 0,
+        'bob': 0
+    }
+
+def draw_collectible(col):
+    ensure_quad()
+    glPushMatrix()
+    glTranslatef(col['x'], col['y'], col['z'] + math.sin(col['bob']) * 10)
+    glRotatef(col['rotation'], 0, 0, 1)
+
+    if 'golden' in col['type']:
+        glColor3f(1.0, 0.8, 0.0)
+    elif col['type'] == 'cube':
+        glColor3f(0.0, 1.0, 0.0)
+    elif col['type'] == 'sphere':
+        glColor3f(0.0, 0.0, 1.0)
+    elif col['type'] == 'cylinder':
+        glColor3f(1.0, 0.0, 1.0)
+
+    if 'cube' in col['type']:
+        glutSolidCube(30)
+    elif 'sphere' in col['type']:
+        gluSphere(_quad, 18, 12, 12)
+    elif 'cylinder' in col['type']:
+        glRotatef(-90, 1, 0, 0)
+        gluCylinder(_quad, 12, 12, 25, 12, 12)
+
+    glPopMatrix()
+
+def update_collectible(col, dt):
+    col['rotation'] += 120 * dt
+    col['bob'] += 4 * dt
+
+def manage_collectibles(dt):
+    global collectibles
+    collectibles = [c for c in collectibles if c['y'] > player.y - 200]
+    if random.random() < COLLECTIBLE_SPAWN_RATE * dt:
+        collectibles.append(spawn_collectible())
 
