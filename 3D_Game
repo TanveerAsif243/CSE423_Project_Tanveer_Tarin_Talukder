@@ -696,3 +696,354 @@ def collect_item(col):
         power_effects['immune_time'] = 6.0
         player.score += total_score
 
+# Collision Detection
+def end_game():
+    global game_state
+    game_state = 'game_over'
+    add_score_to_board(player.score)
+
+def check_collisions():
+    global boss
+
+    if power_effects['invincible_time'] <= 0 and power_effects['immune_time'] <= 0:
+        took_damage = False
+
+        for enemy in enemies[:]:
+            enemy_radius = enemy['r'] * (1.6 * ENEMY_SCALE if enemy.get('boss') else ENEMY_SCALE)
+            if distance_2d(player.x, player.y, enemy['x'], enemy['y']) < player.radius + enemy_radius:
+                if enemy.get('boss'):
+                    if player.z > 40:
+                        enemy['health'] -= 1
+                        player.vz = 500
+                        add_combo()
+                        player.score += int(20 * score_multiplier)
+                        if enemy['health'] <= 0:
+                            player.score += int(300 * score_multiplier)
+                            enemies.remove(enemy)
+                            if boss is enemy:
+                                boss = None
+                    else:
+                        lose_life(30)
+                        took_damage = True
+                else:
+                    lose_life(20)
+                    took_damage = True
+
+            if took_damage:
+                break
+
+        if not took_damage:
+            for obs in obstacles:
+                if distance_2d(player.x, player.y, obs['x'], obs['y']) < 100:
+                    low_enough = (obs['type'] == 'wall' and player.z < 120) or (obs['type'] == 'spinner' and player.z < 140)
+                    if low_enough:
+                        lose_life(1000)
+                        power_effects['invincible_time'] = 2.0
+                        break
+
+    for col in collectibles[:]:
+        if distance_2d(player.x, player.y, col['x'], col['y']) < 50:
+            collect_item(col)
+            collectibles.remove(col)
+
+def lose_life(damage):
+    player.health -= damage
+    combo_reset_on_damage()
+    if player.health <= 0:
+        player.lives -= 1
+        if player.lives <= 0:
+            end_game()
+        else:
+            respawn_player()
+            power_effects['invincible_time'] = 2.0
+            player.health = 100
+
+def respawn_player():
+    player.x = 0
+    player.y = player.y
+    player.z = 0
+    player.health = 100
+
+# Game Logic
+def update_player(dt):
+    if game_state != 'playing':
+        return
+
+    # Add smooth movement
+    update_smooth_movement_simple(dt)
+
+    if power_effects['speed_time'] > 0:
+       speed_multiplier = 5.0
+    else:
+       speed_multiplier = 1.0
+
+    player.y += player.speed_forward * speed_multiplier * dt
+    player.distance += player.speed_forward * speed_multiplier * dt
+
+    
+
+    player.vz += player.gravity * dt
+    player.z += player.vz * dt
+    if player.z <= 0:
+        player.z = 0
+        player.vz = 0
+        player.on_ground = True
+    else:
+        player.on_ground = False
+
+    clamp_to_walls()
+
+    if player.distance >= LEVEL_DISTANCE * player.level:
+        player.level += 1
+
+    for effect in power_effects:
+        if power_effects[effect] > 0:
+            power_effects[effect] -= dt
+    for ability in ability_cooldowns:
+        if ability_cooldowns[ability] > 0:
+            ability_cooldowns[ability] -= dt
+
+def reset_game():
+    global player, enemies, obstacles, collectibles, power_effects
+    global ability_cooldowns, ability_uses, boss, boss_spawned_levels
+    global combo_count, combo_timer, score_multiplier, best_combo, current_movement
+
+    player = Player()
+    player.lives = 3
+    player.health = 100
+    player.score = 0
+    player.level = 1
+
+    enemies = []
+    obstacles = []
+    collectibles = []
+    power_effects = {key: 0 for key in power_effects}
+    ability_cooldowns = {key: 0 for key in ability_cooldowns}
+    ability_uses = {key: 0 for key in ability_uses}
+    boss = None
+    boss_spawned_levels.clear()
+
+    combo_count = 0
+    combo_timer = 0.0
+    score_multiplier = 1.0
+    best_combo = 0
+    
+    # Reset movement state
+    current_movement = {'left': 0, 'right': 0, 'forward': 0, 'backward': 0}
+
+# Main game loop
+def idle():
+    global _last_time_ms, animation_counter
+    animation_counter += 1  # Replace glutGet(GLUT_ELAPSED_TIME)
+    
+    now = animation_counter * 16  # Simulate milliseconds
+    if _last_time_ms is None:
+        _last_time_ms = now
+    dt = (now - _last_time_ms) / 1000.0
+    _last_time_ms = now
+    dt = min(dt, 0.033)
+
+    if game_state == 'playing':
+        update_player(dt)
+        for enemy in enemies:
+            update_enemy(enemy, dt)
+        manage_enemies(dt)
+        for obs in obstacles:
+            update_obstacle(obs, dt)
+        manage_obstacles(dt)
+        for col in collectibles:
+            update_collectible(col, dt)
+        manage_collectibles(dt)
+        check_collisions()
+        update_daynight(dt)
+        decay_combo(dt)
+
+    glutPostRedisplay()
+
+# Menu & Screens
+def draw_menu():
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+    begin_2d()
+    glColor3f(1, 1, 1)
+    draw_text(300, 700, "3D TEMPLE RUN GAME", GLUT_BITMAP_TIMES_ROMAN_24)
+    draw_text(350, 650, "Choose Your Player:", GLUT_BITMAP_HELVETICA_18)
+    for i, ptype in enumerate(PLAYER_TYPES):
+        y_pos = 600 - i * 50
+        marker = ">>>" if i == selected_player else "   "
+        draw_text(200, y_pos, f"{marker} {ptype['name']}: {ptype['special'].replace('_', ' ').title()}")
+    draw_text(150, 350, "Collectibles:")
+    draw_text(150, 320, "Cube/Sphere/Cylinder: +1 score (+2 consecutive)")
+    draw_text(150, 290, "Golden Cube: +Health")
+    draw_text(150, 260, "Golden Sphere: Double Score (8s)")
+    draw_text(150, 230, "Golden Cylinder: Enemy Immunity (6s)")
+    draw_text(150, 170, "Boss every 3 levels (jump on it to damage)")
+    draw_text(150, 140, "Combo Meter: chain items to increase multiplier")
+    draw_text(150, 110, "Day/Night Cycle: dynamic sky & tints")
+    draw_text(200, 70,  "Controls:")
+    draw_text(200, 40,  "A/D: Move | W/S: Speed +/- | Space: Jump | Q: Ability | Enter: Start")
+    end_2d()
+    glutSwapBuffers()
+
+def draw_game_over():
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+    begin_2d()
+    glColor3f(1,1,1)
+    draw_text(400, 600, "GAME OVER", GLUT_BITMAP_TIMES_ROMAN_24)
+    draw_text(350, 550, f"Final Score: {player.score}")
+    draw_text(350, 520, f"Level Reached: {player.level}")
+    draw_text(350, 490, f"Best Combo: {best_combo}")
+    draw_text(350, 460, f"Your Rank: #{get_player_rank(player.score)}")
+    draw_text(350, 400, "Top Scores:")
+    for i, score in enumerate(scoreboard[:5]):
+        draw_text(350, 370 - i * 30, f"{i+1}. {score}")
+    draw_text(300, 200, "Press R to restart or ESC to menu")
+    end_2d()
+    glutSwapBuffers()
+
+# HUD (Heads-Up Display)
+def draw_hud():
+    begin_2d()
+
+    draw_text(10, WINDOW_H - 30, "Lives:")
+    draw_lives(80, WINDOW_H - 25, player.lives)
+
+    glColor3f(1,1,1)
+    draw_text(10, WINDOW_H - 95,  f"Score: {player.score}")
+    draw_text(10, WINDOW_H - 120, f"Level: {player.level}")
+
+    if combo_count > 0:
+        draw_text(10, WINDOW_H - 145, f"Combo: {combo_count} | x{score_multiplier:.1f} | {combo_timer:0.1f}s")
+
+    draw_text(10, WINDOW_H - 170, f"Enemies: {len([e for e in enemies if not e.get('boss')])}")
+    draw_text(10, WINDOW_H - 195, f"Collectibles: {len(collectibles)}")
+
+    if player.consecutive_collect['count'] > 1:
+        draw_text(10, WINDOW_H - 220, f"Consecutive {player.consecutive_collect['type']}: {player.consecutive_collect['count']}x")
+
+    ptype = player.get_type()
+    ability_name = ptype['special'].replace('_', ' ').title()
+    cooldown = ability_cooldowns[ptype['special']]
+    uses = ability_uses[ptype['special']]
+    if cooldown > 0:
+        draw_text(10, WINDOW_H - 245, f"Ability: {ability_name} (CD: {cooldown:.1f}s)")
+    else:
+        draw_text(10, WINDOW_H - 245, f"Ability: {ability_name} (Ready) Uses: {uses}/2")
+
+    y_offset = 270
+    for effect, time_left in power_effects.items():
+        if time_left > 0:
+            effect_name = effect.replace('_', ' ').title()
+            draw_text(10, WINDOW_H - y_offset, f"{effect_name}: {time_left:.1f}s")
+            y_offset += 25
+
+    if boss is not None and boss in enemies:
+        draw_text(WINDOW_W - 220, WINDOW_H - 30, f"BOSS HP: {boss['health']}")
+        draw_text(WINDOW_W - 220, WINDOW_H - 50, f"BOSS AHEAD!")
+
+    end_2d()
+
+# Master display
+def showScreen():
+    # Fixed background color instead of dynamic
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+    if game_state == 'menu':
+        draw_menu()
+    elif game_state == 'game_over':
+        draw_game_over()
+    else:
+        glViewport(0, 0, WINDOW_W, WINDOW_H)
+        setupCamera()
+
+        draw_tiles_infinite()
+        draw_side_walls_infinite()
+
+        for enemy in enemies:
+            draw_enemy(enemy)
+        draw_player()
+        for obs in obstacles:
+            draw_obstacle(obs)
+        for col in collectibles:
+            draw_collectible(col)
+
+        draw_hud()
+
+        glutSwapBuffers()
+
+# Input handling - MODIFIED for smooth movement
+def keyboard(key, x, y):
+    global game_state, selected_player, current_movement
+    if game_state == 'menu':
+        if key == b'\r':
+            game_state = 'playing'
+            reset_game()
+    elif game_state == 'playing':
+        # Set movement with auto-decay
+        if key in (b'a', b'A'):
+            current_movement['left'] = 30    # Will decay over 30 frames
+        elif key in (b'd', b'D'):
+            current_movement['right'] = 30
+        elif key in (b'w', b'W'):
+            current_movement['forward'] = 200
+        elif key in (b's', b'S'):
+            current_movement['backward'] = 30
+        elif key == b' ' and player.on_ground:
+            ptype = player.get_type()
+            player.vz = ptype['jump_power']
+            player.on_ground = False
+        elif key in (b'q', b'Q'):
+            player.use_ability()
+    elif game_state == 'game_over':
+        if key in (b'r', b'R'):
+            game_state = 'playing'
+            reset_game()
+        elif key == b'\x1b':
+            game_state = 'menu'
+
+    if key == b'\x1b':
+        game_state = 'menu'
+
+def special_down(key, x, y):
+    global selected_player, current_movement
+    if game_state == 'menu':
+        if key == GLUT_KEY_UP:
+            selected_player = (selected_player - 1) % len(PLAYER_TYPES)
+        elif key == GLUT_KEY_DOWN:
+            selected_player = (selected_player + 1) % len(PLAYER_TYPES)
+    elif game_state == 'playing':
+        # Set movement with auto-decay
+        if key == GLUT_KEY_LEFT:
+            current_movement['left'] = 30
+        elif key == GLUT_KEY_RIGHT:
+            current_movement['right'] = 30
+        elif key == GLUT_KEY_UP and player.on_ground:
+            ptype = player.get_type()
+            player.vz = ptype['jump_power']
+            player.on_ground = False
+        elif key == GLUT_KEY_DOWN:
+            current_movement['backward'] = 30
+
+# Dummy mouse function to match template
+def mouseListener(button, state, x, y):
+    pass
+
+# Main function
+def main():
+    load_scoreboard()
+
+    glutInit()
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
+    glutInitWindowSize(WINDOW_W, WINDOW_H)
+    glutInitWindowPosition(0, 0)
+    glutCreateWindow(b"3D Temple Run Style Game")
+
+    glutDisplayFunc(showScreen)
+    glutIdleFunc(idle)
+    glutKeyboardFunc(keyboard)
+    glutSpecialFunc(special_down)
+    glutMouseFunc(mouseListener)
+
+    glutMainLoop()
+
+if __name__ == "__main__":
+    main()
