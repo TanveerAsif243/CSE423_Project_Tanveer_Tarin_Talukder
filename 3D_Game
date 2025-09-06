@@ -426,3 +426,173 @@ def draw_lives(x, y, count):
         draw_circle(x + i * spacing, y, r, segments=8)
         glColor3f(1.0, 1.0, 1.0)
         draw_circle(x + i * spacing - 3, y + 4, 3, segments=6)
+
+# Enemies (and Boss)
+def get_enemy_spawn_positions():
+    return [
+        (-400, player.y - 500),
+        (-200, player.y - 450),
+        (0,    player.y - 600),
+        (200,  player.y - 450),
+        (400,  player.y - 500),
+    ]
+
+def spawn_enemy(position_index):
+    base_speed = 120.0 + (player.level * 30)
+    positions = get_enemy_spawn_positions()
+    pos = positions[position_index % len(positions)]
+    return {
+        'x': pos[0],
+        'y': pos[1],
+        'z': 15.0,
+        'r': 15.0,
+        'speed': base_speed,
+        'health': 1,
+        'id': position_index,
+        'boss': False
+    }
+
+def spawn_boss():
+    global boss
+    normal_enemy_speed = 120.0 + (player.level * 30)
+    boss_speed = normal_enemy_speed + 50.0
+    
+    boss = {
+        'x': 0.0,
+        'y': player.y + 300.0,
+        'z': 30.0,
+        'r': 35.0,
+        'speed': boss_speed,
+        'health': BOSS_BASE_HEALTH + max(0, player.level - 1),
+        'rage': 0.0,
+        'boss': True
+    }
+    enemies.append(boss)
+    boss_spawned_levels.add(player.level)
+
+def draw_enemy(e):
+    ensure_quad()
+    glPushMatrix()
+    glTranslatef(e['x'], e['y'], e['z'])
+    scale = 1.6 * ENEMY_SCALE if e.get('boss') else ENEMY_SCALE
+    glScalef(scale, scale, scale)
+
+    if e.get('boss'):
+        t = 0.5 + 0.5 * math.sin(animation_counter * 0.005)
+        glColor3f(0.7 + 0.3*t, 0.1, 0.8 - 0.3*t)
+        gluSphere(_quad, e['r'], 24, 24)
+        glPushMatrix()
+        glTranslatef(0,0,e['r']*0.9)
+        glColor3f(1.0, 0.85, 0.2)
+        # Replace glutSolidTorus with gluSphere
+        gluSphere(_quad, 8, 8, 8)
+        glPopMatrix()
+    else:
+        glColor3f(1.0, 0.2, 0.2)
+        gluSphere(_quad, e['r'], 16, 16)
+
+    glPushMatrix()
+    glTranslatef(0, 0, e['r'] * 0.8)
+    glColor3f(0.0, 0.0, 0.0)
+    gluSphere(_quad, e['r'] * 0.5, 12, 12)
+    glPopMatrix()
+
+    glPopMatrix()
+
+def update_enemy(e, dt):
+    if power_effects['freeze_time'] > 0:
+        return
+
+    vx = player.x - e['x']
+    vy = player.y - e['y']
+    length = math.sqrt(vx * vx + vy * vy)
+    
+    if length > 0:
+        vx /= length
+        vy /= length
+        speed = e['speed']
+        
+        if e.get('boss'):
+            e['rage'] = (e['rage'] + dt) % 2.0
+        
+        e['x'] += vx * speed * dt
+        e['y'] += vy * speed * dt
+
+    e['z'] = 30.0 if e.get('boss') else 15.0
+    
+    left_x = -GRID_LENGTH + WALL_INSET + 100
+    right_x = GRID_LENGTH - WALL_INSET - 100
+    e['x'] = clamp(e['x'], left_x, right_x)
+
+def manage_enemies(dt):
+    global enemies, boss
+    
+    enemies = [e for e in enemies if distance_2d(player.x, player.y, e['x'], e['y']) < 1400]
+    
+    boss_enemies = [e for e in enemies if e.get('boss')]
+    if boss_enemies:
+        boss = boss_enemies[0]
+    else:
+        boss = None
+    
+    if (player.level > 0 and 
+        player.level % BOSS_LEVEL_INTERVAL == 0 and 
+        player.level not in boss_spawned_levels):
+        spawn_boss()
+    
+    target_enemies = 5 + (player.level - 1) * 2
+    target_enemies = min(target_enemies, 15)
+    
+    if boss is not None:
+        target_enemies = max(2, int(target_enemies * 0.6))
+    
+    current_normal_enemies = len([e for e in enemies if not e.get('boss')])
+    while current_normal_enemies < target_enemies:
+        position_index = len(enemies) % 5
+        enemies.append(spawn_enemy(position_index))
+        current_normal_enemies += 1
+
+# Obstacles
+def spawn_obstacle():
+    obs_type = random.choice(['wall', 'spinner'])
+    return {
+        'type': obs_type,
+        'x': random.uniform(-GRID_LENGTH + WALL_INSET + 150, GRID_LENGTH - WALL_INSET - 150),
+        'y': player.y + random.uniform(400, 1000),
+        'z': 0,
+        'rotation': 0
+    }
+
+def draw_obstacle(obs):
+    ensure_quad()
+    glPushMatrix()
+    glTranslatef(obs['x'], obs['y'], obs['z'])
+
+    if obs['type'] == 'wall':
+        b = 0.7 + 0.3 * get_day_brightness()
+        glColor3f(0.6*b, 0.6*b, 0.6*b)
+        glPushMatrix()
+        glScalef(80, 80, 160)
+        glutSolidCube(1)
+        glPopMatrix()
+    elif obs['type'] == 'spinner':
+        b = 0.8 + 0.2 * get_day_brightness()
+        glColor3f(0.9*b, 0.1*b, 0.1*b)
+        glPushMatrix()
+        glRotatef(obs['rotation'], 0, 0, 1)
+        glRotatef(-90, 1, 0, 0)
+        gluCylinder(_quad, 35, 35, 180, 16, 16)
+        glPopMatrix()
+
+    glPopMatrix()
+
+def update_obstacle(obs, dt):
+    if obs['type'] == 'spinner':
+        obs['rotation'] += 180 * dt
+
+def manage_obstacles(dt):
+    global obstacles
+    obstacles = [o for o in obstacles if o['y'] > player.y - 300]
+    if random.random() < OBSTACLE_SPAWN_RATE * (1 + player.level * 0.1) * dt:
+        obstacles.append(spawn_obstacle())
+
